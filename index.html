@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f8f5ed">
+<meta name="description" content="Ассистент осанки с распознаванием позы и напоминаниями на основе Google Teachable Machine.">
+<title>Ассистент осанки</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8.3/dist/teachablemachine-pose.min.js"></script>
+</head>
+<body>
+<main class="page">
+  <header class="hero">
+    <div class="eyebrow"><span class="eyebrow-dot"></span> УМНЫЕ НАПОМИНАНИЯ ОБ ОСАНКЕ</div>
+    <h1>Ассистент <span>осанки</span></h1>
+    <p class="intro">Модель, обученная в Google Teachable Machine, анализирует изображение с веб-камеры и помогает вовремя обратить внимание на положение тела. Запустите отслеживание и разрешите уведомления, чтобы получать подсказки, когда это возможно.</p>
+  </header>
+
+  <div class="workspace">
+    <section class="panel camera-panel" aria-labelledby="camera-heading">
+      <div class="panel-heading">
+        <div><div class="section-kicker">01 / ОТСЛЕЖИВАНИЕ</div><h2 id="camera-heading">Камера</h2></div>
+        <span id="cameraBadge" class="badge"><span class="badge-dot"></span>Выключена</span>
+      </div>
+      <div class="camera-frame">
+        <div id="placeholder" class="camera-placeholder">
+          <div class="camera-symbol" aria-hidden="true"><svg viewBox="0 0 48 48"><rect x="5" y="11" width="27" height="26" rx="5"/><path d="m32 19 11-6v22l-11-6z"/><circle cx="18.5" cy="24" r="6"/></svg></div>
+          <strong>Здесь появится изображение с камеры</strong>
+          <span>Нажмите «Начать отслеживание», чтобы запустить модель.</span>
+        </div>
+        <canvas id="view" width="400" height="400" hidden aria-label="Изображение с камеры с отмеченным положением тела"></canvas>
+        <div class="camera-live-label" id="liveLabel" hidden><span></span>КАМЕРА АКТИВНА</div>
+      </div>
+      <div class="camera-controls">
+        <button id="start" class="button button-primary"><span class="button-icon">▶</span>Начать отслеживание</button>
+        <button id="stop" class="button button-secondary" disabled>Остановить</button>
+      </div>
+      <p id="status" class="status-line" role="status" aria-live="polite">Модель ещё не загружена.</p>
+      <div class="privacy-note"><span class="privacy-icon">✓</span><span>Обработка выполняется в браузере. Видео не отправляется на сервер проекта.</span></div>
+    </section>
+
+    <section class="panel results-panel" aria-labelledby="result-heading">
+      <div class="panel-heading">
+        <div><div class="section-kicker">02 / АНАЛИЗ МОДЕЛИ</div><h2 id="result-heading">Результат распознавания</h2></div>
+        <span id="modelBadge" class="badge"><span class="badge-dot"></span>Не запущена</span>
+      </div>
+      <div id="result" class="result neutral" aria-live="polite"><div class="result-mark" id="resultMark">✳</div><div><h3 id="resultTitle">Ожидание запуска</h3><p id="resultText">Включите камеру, чтобы начать.</p></div></div>
+      <div class="probabilities">
+        <div class="probability-block"><div class="prob-row"><span><i class="legend-dot good-dot"></i>Правильная осанка</span><b id="goodText">—</b></div><div class="track"><div id="goodBar" class="bar good"></div></div></div>
+        <div class="probability-block"><div class="prob-row"><span><i class="legend-dot bad-dot"></i>Плохая осанка</span><b id="badText">—</b></div><div class="track"><div id="badBar" class="bar bad"></div></div></div>
+      </div>
+      <div class="settings">
+        <div class="settings-heading"><div><h3>Чувствительность</h3><p>Порог уверенности для подсказок</p></div><output id="thresholdText" for="threshold">70%</output></div>
+        <input id="threshold" type="range" min="50" max="95" step="5" value="70" aria-label="Порог уверенности">
+        <div class="range-labels"><span>50% · мягче</span><span>95% · строже</span></div>
+      </div>
+      <div id="warning" class="warning" hidden role="alert"><span class="warning-icon">!</span><div><strong>Проверьте положение тела</strong><p>Модель два раза подряд определила «Плохая осанка». Сделайте паузу и проверьте позу.</p></div></div>
+    </section>
+  </div>
+
+  <section class="panel notification-panel" aria-labelledby="notifications-heading">
+    <div class="panel-heading notification-heading">
+      <div><div class="section-kicker">03 / НАПОМИНАНИЯ</div><h2 id="notifications-heading">Подсказки и уведомления</h2></div>
+      <span id="notificationBadge" class="badge"><span class="badge-dot"></span>Не настроены</span>
+    </div>
+    <div class="notification-content">
+      <div class="notification-copy"><p>Разрешите браузеру отправлять уведомления, чтобы получать системные подсказки, пока приложение работает.</p><p class="small-note">Если перейти на другую вкладку, браузер может ограничить работу приложения. Отслеживание в фоне зависит от браузера и энергосбережения; после закрытия страницы оно прекращается.</p><p id="notificationStatus" class="small-note">Разрешение на системные уведомления ещё не запрошено.</p></div>
+      <div class="notification-actions"><button id="enableNotifications" class="button button-secondary">Включить уведомления</button><label class="toggle-row" for="stretchToggle"><input id="stretchToggle" type="checkbox" checked><span class="toggle-ui"></span><span>Напоминать размяться каждые 40 минут</span></label></div>
+    </div>
+  </section>
+
+  <section class="how-section" aria-labelledby="how-heading">
+    <div class="section-kicker">БЫСТРЫЙ СТАРТ</div><h2 id="how-heading">Как начать</h2>
+    <div class="steps-grid">
+      <article class="step"><span class="step-number">01</span><h3>Разрешите доступ к камере</h3><p>Нажмите «Начать отслеживание» — браузер спросит разрешение. Камера нужна, чтобы модель видела положение тела.</p></article>
+      <article class="step"><span class="step-number">02</span><h3>Включите уведомления</h3><p>Разрешите системные уведомления. Их показ зависит от настроек устройства и браузера.</p></article>
+      <article class="step"><span class="step-number">03</span><h3>Сядьте ровно</h3><p>Модель обучена различать «правильную осанку» и «плохую осанку» по положению корпуса на кадре.</p></article>
+      <article class="step"><span class="step-number">04</span><h3>Продолжайте заниматься делами</h3><p>Можно переключиться на другую вкладку, пока страница открыта. Но браузер может ограничить фоновую работу, поэтому периодически проверяйте, что отслеживание продолжается.</p></article>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="footer-note"><span class="footer-icon">i</span><div><strong>Приватность</strong><p>Кадры обрабатываются локально в вашем браузере (TensorFlow.js). Они не записываются, не сохраняются и не отправляются на сервер.</p></div></div>
+    <div class="disclaimer"><strong>Важно знать</strong><p>Приложение не является медицинским инструментом, не диагностирует заболевания и не гарантирует правильную осанку. Результат зависит от качества изображения и данных, на которых обучалась модель. Используйте подсказки как повод проверить положение тела, а не как медицинское заключение.</p></div>
+    <div class="footer-bottom"><span>Ассистент осанки</span><span>Учебный проект · Машинное обучение</span></div>
+  </footer>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
