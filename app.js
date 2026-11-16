@@ -2,9 +2,11 @@
 "use strict";
 const MODEL_URL = "https://teachablemachine.withgoogle.com/models/ErDzmxAv-/";
 const GOOD = "Правильная осанка", BAD = "Плохая осанка", REQUIRED_BAD = 2;
+const SMOOTHING_ALPHA = 0.25;
 const $ = id => document.getElementById(id);
 const canvas = $("view"), ctx = canvas.getContext("2d");
 let model = null, webcam = null, running = false, raf = null, badCount = 0, latest = null;
+let smoothedGood = null, smoothedBad = null;
 let alertSent = false, lastStretchAt = 0, stretchTimer = null;
 const STRETCH_MS = 40 * 60 * 1000;
 
@@ -108,7 +110,11 @@ async function start() {
     webcam = new tmPose.Webcam(400,400,false);
     await webcam.setup(); await webcam.play();
     running = true; canvas.hidden = false; $("placeholder").hidden = true; $("stop").disabled = false; $("liveLabel").hidden = false;
-    badCount = 0; alertSent = false; lastStretchAt = Date.now();
+    badCount = 0;
+    alertSent = false;
+    smoothedGood = null;
+    smoothedBad = null;
+    lastStretchAt = Date.now();
     status("Камера работает. Анализируем позу.","live");
     if (stretchTimer) clearInterval(stretchTimer);
     stretchTimer = setInterval(checkStretchReminder, 15000);
@@ -125,7 +131,12 @@ async function start() {
 }
 function stop() {
   running = false; if (raf !== null) cancelAnimationFrame(raf); raf = null;
-  if (stretchTimer) clearInterval(stretchTimer); stretchTimer = null; lastStretchAt = 0; alertSent = false;
+  if (stretchTimer) clearInterval(stretchTimer);
+  stretchTimer = null;
+  lastStretchAt = 0;
+  alertSent = false;
+  smoothedGood = null;
+  smoothedBad = null;
   if (webcam) { try { webcam.stop(); } catch (_) {} }
   webcam = null; ctx.clearRect(0,0,canvas.width,canvas.height); canvas.hidden = true; $("placeholder").hidden = false; $("liveLabel").hidden = true;
   $("start").disabled = false; $("stop").disabled = true; $("warning").hidden = true; badCount = 0;
@@ -154,10 +165,26 @@ function showPredictions(predictions) {
   const good = predictions.find(p => normalizeLabel(p.className) === normalizeLabel(GOOD));
   const bad = predictions.find(p => normalizeLabel(p.className) === normalizeLabel(BAD));
   if (!good || !bad) { badCount=0; result("neutral","Неизвестные классы","Названия классов модели должны быть «Правильная осанка» и «Плохая осанка»."); return; }
-  $("goodText").textContent = Math.round(good.probability*100)+"%";
-  $("badText").textContent = Math.round(bad.probability*100)+"%";
-  $("goodBar").style.width = (good.probability*100)+"%";
-  $("badBar").style.width = (bad.probability*100)+"%";
+  // Инициализируем сглаженные значения при первом предсказании.
+if (smoothedGood === null || smoothedBad === null) {
+  smoothedGood = good.probability;
+  smoothedBad = bad.probability;
+} else {
+  // Экспоненциальное сглаживание вероятностей для отображения.
+  smoothedGood =
+    SMOOTHING_ALPHA * good.probability +
+    (1 - SMOOTHING_ALPHA) * smoothedGood;
+
+  smoothedBad =
+    SMOOTHING_ALPHA * bad.probability +
+    (1 - SMOOTHING_ALPHA) * smoothedBad;
+}
+
+// На шкале отображаем сглаженные значения.
+$("goodText").textContent = Math.round(smoothedGood * 100) + "%";
+$("badText").textContent = Math.round(smoothedBad * 100) + "%";
+$("goodBar").style.width = (smoothedGood * 100) + "%";
+$("badBar").style.width = (smoothedBad * 100) + "%";
   const threshold = Number($("threshold").value)/100;
   const winner = good.probability >= bad.probability ? good : bad;
   if (winner.probability < threshold) {
@@ -177,7 +204,9 @@ function showPredictions(predictions) {
     }
   }
 }
-$("threshold").addEventListener("input",()=>{ $("thresholdText").textContent=$("threshold").value+"%"; if(latest) showPredictions(latest); });
+$("threshold").addEventListener("input", () => {
+  $("thresholdText").textContent = $("threshold").value + "%";
+});
 $("start").addEventListener("click",start);
 $("stop").addEventListener("click",stop);
 $("enableNotifications").addEventListener("click",enableNotifications);
