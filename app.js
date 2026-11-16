@@ -8,6 +8,7 @@ const canvas = $("view"), ctx = canvas.getContext("2d");
 let model = null, webcam = null, running = false, raf = null, badCount = 0, latest = null;
 let smoothedGood = null, smoothedBad = null;
 let alertSent = false, lastStretchAt = 0, stretchTimer = null;
+let currentNotification = null;
 const STRETCH_MS = 40 * 60 * 1000;
 
 function status(message, state="") {
@@ -58,9 +59,30 @@ function updateNotificationUI() {
   }
 }
 function sendNotification(title, body, tag) {
-  if (!("Notification" in window) || Notification.permission !== "granted") return false;
+  if (!("Notification" in window) || Notification.permission !== "granted") {
+    return false;
+  }
+
   try {
-    new Notification(title, { body, tag, icon: "/favicon.svg", renotify: false });
+    // Закрываем предыдущее уведомление о плохой осанке,
+    // если оно ещё открыто.
+    if (tag === "posture-alert" && currentNotification) {
+      currentNotification.close();
+      currentNotification = null;
+    }
+
+    const notification = new Notification(title, {
+      body,
+      tag,
+      icon: "/favicon.svg",
+      renotify: true
+    });
+
+    // Сохраняем ссылку только на уведомление о плохой осанке.
+    if (tag === "posture-alert") {
+      currentNotification = notification;
+    }
+
     return true;
   } catch (e) {
     console.warn("Не удалось показать системное уведомление:", e);
