@@ -52,12 +52,7 @@
         <div class="probability-block"><div class="prob-row"><span><i class="legend-dot good-dot"></i>Правильная осанка</span><b id="goodText">—</b></div><div class="track"><div id="goodBar" class="bar good"></div></div></div>
         <div class="probability-block"><div class="prob-row"><span><i class="legend-dot bad-dot"></i>Плохая осанка</span><b id="badText">—</b></div><div class="track"><div id="badBar" class="bar bad"></div></div></div>
       </div>
-      <div class="settings">
-        <div class="settings-heading"><div><h3>Чувствительность</h3><p>Порог уверенности для подсказок</p></div><output id="thresholdText" for="threshold">70%</output></div>
-        <input id="threshold" type="range" min="50" max="95" step="5" value="70" aria-label="Порог уверенности">
-        <div class="range-labels"><span>50% · мягче</span><span>95% · строже</span></div>
-      </div>
-      <div id="warning" class="warning" hidden role="alert"><span class="warning-icon">!</span><div><strong>Проверьте положение тела</strong><p>Модель два раза подряд определила «Плохая осанка». Сделайте паузу и проверьте позу.</p></div></div>
+      <div id="warning" class="warning" hidden role="alert"><span class="warning-icon">!</span><div><strong>Проверьте положение тела</strong><p>Модель определила «Плохая осанка». Сделайте паузу и проверьте позу.</p></div></div>
     </section>
   </div>
 
