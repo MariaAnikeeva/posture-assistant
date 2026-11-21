@@ -7,12 +7,14 @@ const BAD = "Плохая осанка";
 const REQUIRED_BAD = 3;   // Сколько раз подряд нужна плохая осанка
 const REQUIRED_GOOD = 5;  // Сколько раз подряд нужна хорошая для сброса уведомления
 const SMOOTHING_ALPHA = 0.25;
+const MIN_CLASS_MARGIN = 0.10; // Минимальная разница между сглаженными оценками классов
 const $ = id => document.getElementById(id);
 const canvas = $("view"), ctx = canvas.getContext("2d");
 let model = null, webcam = null, running = false, raf = null;
-let badCount = 0, goodCount = 0, latest = null;
+let badCount = 0, goodCount = 0;
 let smoothedGood = null, smoothedBad = null;
-let alertSent = false, lastStretchAt = 0, stretchTimer = null;
+let alertSent = false, notificationSent = false;
+let lastStretchAt = 0, stretchTimer = null;
 let currentNotification = null;
 const STRETCH_MS = 40 * 60 * 1000;
 
@@ -102,6 +104,17 @@ async function enableNotifications() {
     console.warn("Не удалось запросить разрешение уведомлений:", e);
   }
   updateNotificationUI();
+
+  // Если предупреждение уже появилось, но разрешения ещё не было,
+  // отправляем уведомление после того, как пользователь его включил.
+  if (running && alertSent && !notificationSent &&
+      badCount >= REQUIRED_BAD && Notification.permission === "granted") {
+    notificationSent = sendNotification(
+      "Проверьте положение тела",
+      "Модель несколько раз подряд определила класс «Плохая осанка». Возможно, стоит проверить позу.",
+      "posture-alert"
+    );
+  }
 }
 function checkStretchReminder() {
   if (!running || !$("stretchToggle").checked || !lastStretchAt) return;
@@ -123,14 +136,14 @@ async function loadModel() {
   const labels = loadedModel.getClassLabels ? loadedModel.getClassLabels() : null;
   if (labels && (!labels.some(label => normalizeLabel(label) === normalizeLabel(GOOD)) ||
                  !labels.some(label => normalizeLabel(label) === normalizeLabel(BAD)))) {
-    throw new Error("Названия классов в модели не совпадают с ожидаемыми. Проверь классы в Teachable Machine.");
+    throw new Error("Названия классов в модели не совпадают с ожидаемыми. Проверьте классы в Teachable Machine.");
   }
   model = loadedModel;
   modelStatus("Модель загружена", "live");
 }
 async function start() {
   $("start").disabled = true; $("stop").disabled = true;
-  status("Загружаем модель…"); result("neutral","Загрузка модели","Подожди немного.");
+  status("Загружаем модель…"); result("neutral","Загрузка модели","Подождите немного.");
   try {
     await loadModel();
     status("Запрашиваем доступ к камере…");
@@ -140,9 +153,10 @@ async function start() {
     badCount = 0;
     goodCount = 0;
     alertSent = false;
+    notificationSent = false;
     smoothedGood = null;
     smoothedBad = null;
-    lastStretchAt = Date.now();
+    lastStretchAt = $("stretchToggle").checked ? Date.now() : 0;
     status("Камера работает. Анализируем позу.","live");
     if (stretchTimer) clearInterval(stretchTimer);
     stretchTimer = setInterval(checkStretchReminder, 15000);
@@ -163,6 +177,7 @@ function stop() {
   stretchTimer = null;
   lastStretchAt = 0;
   alertSent = false;
+  notificationSent = false;
   smoothedGood = null;
   smoothedBad = null;
   if (webcam) { try { webcam.stop(); } catch (_) {} }
@@ -173,7 +188,7 @@ function stop() {
   badCount = 0;
   goodCount = 0;
   status("Камера выключена."); modelStatus(model ? "Модель загружена" : "Не запущена");
-  result("neutral","Ожидание запуска","Включи камеру, чтобы начать.");
+  result("neutral","Ожидание запуска","Включите камеру, чтобы начать.");
 }
 async function loop() {
   if (!running || !webcam || !model) return;
@@ -181,6 +196,11 @@ async function loop() {
     webcam.update();
     const {pose,posenetOutput} = await model.estimatePose(webcam.canvas);
     const predictions = await model.predict(posenetOutput);
+    if (!running) return;
+
+    if ($("cameraBadge").classList.contains("error")) {
+      status("Камера работает. Анализируем позу.","live");
+    }
     ctx.drawImage(webcam.canvas,0,0,canvas.width,canvas.height);
     if (pose) {
       tmPose.drawKeypoints(pose.keypoints,0.5,ctx);
@@ -194,8 +214,6 @@ async function loop() {
 }
 
 function showPredictions(predictions) {
-  latest = predictions;
-
   const good = predictions.find(
     p => normalizeLabel(p.className) === normalizeLabel(GOOD)
   );
@@ -235,10 +253,13 @@ function showPredictions(predictions) {
   $("badBar").style.width = (smoothedBad * 100) + "%";
 
   const threshold = Number($("threshold").value) / 100;
-  const winner = good.probability >= bad.probability ? good : bad;
+  const isGoodWinner = smoothedGood >= smoothedBad;
+  const winnerProbability = Math.max(smoothedGood, smoothedBad);
+  const classMargin = Math.abs(smoothedGood - smoothedBad);
 
-  // Если модель недостаточно уверена, не учитываем это предсказание.
-  if (winner.probability < threshold) {
+  // Решение принимается по сглаженным оценкам, а не по скачущим значениям одного кадра.
+  // При близких оценках модель считается неуверенной.
+  if (winnerProbability < threshold || classMargin < MIN_CLASS_MARGIN) {
     badCount = 0;
     goodCount = 0;
     $("warning").hidden = true;
@@ -246,13 +267,13 @@ function showPredictions(predictions) {
     result(
       "neutral",
       "Не удаётся уверенно определить позу",
-      "Попробуй улучшить освещение и расположиться так, чтобы модель хорошо видела позу."
+      "Попробуйте улучшить освещение и расположиться так, чтобы модель хорошо видела позу."
     );
     return;
   }
 
   // Модель определила правильную осанку.
-  if (normalizeLabel(winner.className) === normalizeLabel(GOOD)) {
+  if (isGoodWinner) {
     badCount = 0;
     goodCount = Math.min(goodCount + 1, REQUIRED_GOOD);
 
@@ -260,6 +281,7 @@ function showPredictions(predictions) {
     // последовательных уверенных определений хорошей осанки.
     if (alertSent && goodCount >= REQUIRED_GOOD) {
       alertSent = false;
+      notificationSent = false;
       goodCount = 0;
     }
 
@@ -283,20 +305,19 @@ function showPredictions(predictions) {
   result(
     "bad",
     BAD,
-    `Уверенность модели: ${Math.round(winner.probability * 100)}%. Последовательных определений: ${badCount}/${REQUIRED_BAD}.`
+    `Уверенность модели: ${Math.round(winnerProbability * 100)}%. Последовательных определений: ${badCount}/${REQUIRED_BAD}.`
   );
 
   if (badCount >= REQUIRED_BAD) {
     $("warning").hidden = false;
 
     if (!alertSent) {
-      sendNotification(
+      alertSent = true;
+      notificationSent = sendNotification(
         "Проверьте положение тела",
         "Модель несколько раз подряд определила класс «Плохая осанка». Возможно, стоит проверить позу.",
         "posture-alert"
       );
-
-      alertSent = true;
     }
   }
 }
@@ -309,7 +330,7 @@ $("stop").addEventListener("click",stop);
 $("enableNotifications").addEventListener("click",enableNotifications);
 $("stretchToggle").addEventListener("change", () => {
   try { localStorage.setItem("posture-assistant-stretch-reminder", $("stretchToggle").checked ? "on" : "off"); } catch (_) {}
-  if ($( "stretchToggle" ).checked && running && !lastStretchAt) lastStretchAt = Date.now();
+  if (running) lastStretchAt = $("stretchToggle").checked ? Date.now() : 0;
 });
 try { $("stretchToggle").checked = localStorage.getItem("posture-assistant-stretch-reminder") !== "off"; } catch (_) {}
 updateNotificationUI();
