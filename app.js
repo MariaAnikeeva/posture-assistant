@@ -1,11 +1,16 @@
 (() => {
 "use strict";
 const MODEL_URL = "https://teachablemachine.withgoogle.com/models/ErDzmxAv-/";
-const GOOD = "Правильная осанка", BAD = "Плохая осанка", REQUIRED_BAD = 2;
+const GOOD = "Правильная осанка";
+const BAD = "Плохая осанка";
+
+const REQUIRED_BAD = 3;   // Сколько раз подряд нужна плохая осанка
+const REQUIRED_GOOD = 5;  // Сколько раз подряд нужна хорошая для сброса уведомления
 const SMOOTHING_ALPHA = 0.25;
 const $ = id => document.getElementById(id);
 const canvas = $("view"), ctx = canvas.getContext("2d");
-let model = null, webcam = null, running = false, raf = null, badCount = 0, latest = null;
+let model = null, webcam = null, running = false, raf = null;
+let badCount = 0, goodCount = 0, latest = null;
 let smoothedGood = null, smoothedBad = null;
 let alertSent = false, lastStretchAt = 0, stretchTimer = null;
 let currentNotification = null;
@@ -133,6 +138,7 @@ async function start() {
     await webcam.setup(); await webcam.play();
     running = true; canvas.hidden = false; $("placeholder").hidden = true; $("stop").disabled = false; $("liveLabel").hidden = false;
     badCount = 0;
+    goodCount = 0;
     alertSent = false;
     smoothedGood = null;
     smoothedBad = null;
@@ -161,7 +167,11 @@ function stop() {
   smoothedBad = null;
   if (webcam) { try { webcam.stop(); } catch (_) {} }
   webcam = null; ctx.clearRect(0,0,canvas.width,canvas.height); canvas.hidden = true; $("placeholder").hidden = false; $("liveLabel").hidden = true;
-  $("start").disabled = false; $("stop").disabled = true; $("warning").hidden = true; badCount = 0;
+  $("start").disabled = false;
+  $("stop").disabled = true;
+  $("warning").hidden = true;
+  badCount = 0;
+  goodCount = 0;
   status("Камера выключена."); modelStatus(model ? "Модель загружена" : "Не запущена");
   result("neutral","Ожидание запуска","Включи камеру, чтобы начать.");
 }
@@ -182,50 +192,115 @@ async function loop() {
   }
   if (running) raf = requestAnimationFrame(loop);
 }
+
 function showPredictions(predictions) {
   latest = predictions;
-  const good = predictions.find(p => normalizeLabel(p.className) === normalizeLabel(GOOD));
-  const bad = predictions.find(p => normalizeLabel(p.className) === normalizeLabel(BAD));
-  if (!good || !bad) { badCount=0; result("neutral","Неизвестные классы","Названия классов модели должны быть «Правильная осанка» и «Плохая осанка»."); return; }
-  // Инициализируем сглаженные значения при первом предсказании.
-if (smoothedGood === null || smoothedBad === null) {
-  smoothedGood = good.probability;
-  smoothedBad = bad.probability;
-} else {
-  // Экспоненциальное сглаживание вероятностей для отображения.
-  smoothedGood =
-    SMOOTHING_ALPHA * good.probability +
-    (1 - SMOOTHING_ALPHA) * smoothedGood;
 
-  smoothedBad =
-    SMOOTHING_ALPHA * bad.probability +
-    (1 - SMOOTHING_ALPHA) * smoothedBad;
-}
+  const good = predictions.find(
+    p => normalizeLabel(p.className) === normalizeLabel(GOOD)
+  );
+  const bad = predictions.find(
+    p => normalizeLabel(p.className) === normalizeLabel(BAD)
+  );
 
-// На шкале отображаем сглаженные значения.
-$("goodText").textContent = Math.round(smoothedGood * 100) + "%";
-$("badText").textContent = Math.round(smoothedBad * 100) + "%";
-$("goodBar").style.width = (smoothedGood * 100) + "%";
-$("badBar").style.width = (smoothedBad * 100) + "%";
-  const threshold = Number($("threshold").value)/100;
+  if (!good || !bad) {
+    badCount = 0;
+    goodCount = 0;
+    $("warning").hidden = true;
+    result(
+      "neutral",
+      "Неизвестные классы",
+      "Названия классов модели должны быть «Правильная осанка» и «Плохая осанка»."
+    );
+    return;
+  }
+
+  // Сглаживание вероятностей для отображения.
+  if (smoothedGood === null || smoothedBad === null) {
+    smoothedGood = good.probability;
+    smoothedBad = bad.probability;
+  } else {
+    smoothedGood =
+      SMOOTHING_ALPHA * good.probability +
+      (1 - SMOOTHING_ALPHA) * smoothedGood;
+
+    smoothedBad =
+      SMOOTHING_ALPHA * bad.probability +
+      (1 - SMOOTHING_ALPHA) * smoothedBad;
+  }
+
+  $("goodText").textContent = Math.round(smoothedGood * 100) + "%";
+  $("badText").textContent = Math.round(smoothedBad * 100) + "%";
+  $("goodBar").style.width = (smoothedGood * 100) + "%";
+  $("badBar").style.width = (smoothedBad * 100) + "%";
+
+  const threshold = Number($("threshold").value) / 100;
   const winner = good.probability >= bad.probability ? good : bad;
+
+  // Если модель недостаточно уверена, не учитываем это предсказание.
   if (winner.probability < threshold) {
-    badCount=0; alertSent=false; $("warning").hidden=true;
-    result("neutral","Не удаётся уверенно определить позу","Попробуй улучшить освещение и расположиться так, чтобы модель хорошо видела позу."); return;
+    badCount = 0;
+    goodCount = 0;
+    $("warning").hidden = true;
+
+    result(
+      "neutral",
+      "Не удаётся уверенно определить позу",
+      "Попробуй улучшить освещение и расположиться так, чтобы модель хорошо видела позу."
+    );
+    return;
   }
+
+  // Модель определила правильную осанку.
   if (normalizeLabel(winner.className) === normalizeLabel(GOOD)) {
-    badCount=0; alertSent=false; $("warning").hidden=true; result("good",GOOD,"Модель уверенно определяет правильную осанку."); return;
+    badCount = 0;
+    goodCount = Math.min(goodCount + 1, REQUIRED_GOOD);
+
+    // Повторно разрешаем уведомление только после пяти
+    // последовательных уверенных определений хорошей осанки.
+    if (alertSent && goodCount >= REQUIRED_GOOD) {
+      alertSent = false;
+      goodCount = 0;
+    }
+
+    $("warning").hidden = true;
+
+    result(
+      "good",
+      GOOD,
+      alertSent
+        ? `Модель определяет правильную осанку. Для сброса уведомления нужно ещё ${REQUIRED_GOOD - goodCount} последовательных определений.`
+        : "Модель уверенно определяет правильную осанку."
+    );
+
+    return;
   }
+
+  // Модель определила плохую осанку.
+  goodCount = 0;
   badCount++;
-  result("bad",BAD,`Уверенность модели: ${Math.round(winner.probability*100)}%. Последовательных определений: ${badCount}/${REQUIRED_BAD}.`);
+
+  result(
+    "bad",
+    BAD,
+    `Уверенность модели: ${Math.round(winner.probability * 100)}%. Последовательных определений: ${badCount}/${REQUIRED_BAD}.`
+  );
+
   if (badCount >= REQUIRED_BAD) {
-    $("warning").hidden=false;
+    $("warning").hidden = false;
+
     if (!alertSent) {
-      sendNotification("Проверьте положение тела", "Модель несколько раз подряд определила класс «Плохая осанка». Возможно, стоит проверить позу.", "posture-alert");
+      sendNotification(
+        "Проверьте положение тела",
+        "Модель несколько раз подряд определила класс «Плохая осанка». Возможно, стоит проверить позу.",
+        "posture-alert"
+      );
+
       alertSent = true;
     }
   }
 }
+
 $("threshold").addEventListener("input", () => {
   $("thresholdText").textContent = $("threshold").value + "%";
 });
