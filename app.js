@@ -128,7 +128,7 @@ function normalizeLabel(label) {
 }
 async function loadModel() {
   if (model) return;
-  if (!window.tmPose) throw new Error("Не загрузилась библиотека модели. Проверь интернет и обнови страницу.");
+  if (!window.tmPose) throw new Error("Не загрузилась библиотека модели. Проверьте подключение к интернету и обновите страницу.");
   modelStatus("Загружаем модель");
   // Keep the model local until validation succeeds. A failed check must not
   // leave a partially initialized model that makes the next click behave differently.
@@ -168,7 +168,7 @@ async function start() {
     canvas.hidden = true; $("placeholder").hidden = false; $("liveLabel").hidden = true;
     if (stretchTimer) clearInterval(stretchTimer); stretchTimer = null;
     status(e.message || "Не удалось запустить камеру или модель.","error");
-    modelStatus("Ошибка","error"); result("neutral","Не удалось запустить",(e && e.message) ? e.message : "Проверь разрешение камеры и подключение к интернету.");
+    modelStatus("Ошибка","error"); result("neutral","Не удалось запустить",(e && e.message) ? e.message : "Проверьте разрешение камеры и подключение к интернету.");
   }
 }
 function stop() {
