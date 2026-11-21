@@ -7,10 +7,9 @@ const BAD = "Плохая осанка";
 const REQUIRED_BAD = 3;   // Сколько раз подряд нужна плохая осанка
 const REQUIRED_GOOD = 5;  // Сколько раз подряд нужна хорошая для сброса уведомления
 const SMOOTHING_ALPHA = 0.25;
-const MIN_CLASS_MARGIN = 0.10; // Минимальная разница между сглаженными оценками классов
 const $ = id => document.getElementById(id);
 const canvas = $("view"), ctx = canvas.getContext("2d");
-let model = null, webcam = null, running = false, raf = null;
+let model = null, webcam = null, running = false, loopTimer = null;
 let badCount = 0, goodCount = 0;
 let smoothedGood = null, smoothedBad = null;
 let alertSent = false, notificationSent = false;
@@ -172,7 +171,9 @@ async function start() {
   }
 }
 function stop() {
-  running = false; if (raf !== null) cancelAnimationFrame(raf); raf = null;
+  running = false;
+  if (loopTimer !== null) clearTimeout(loopTimer);
+  loopTimer = null;
   if (stretchTimer) clearInterval(stretchTimer);
   stretchTimer = null;
   lastStretchAt = 0;
@@ -210,7 +211,9 @@ async function loop() {
   } catch (e) {
     console.error("Ошибка анализа кадра:", e); status("Ошибка анализа кадра: " + (e && e.message ? e.message : "подробности в консоли"),"error");
   }
-  if (running) raf = requestAnimationFrame(loop);
+  // Таймер продолжает давать браузеру возможность выполнять анализ в скрытой вкладке.
+  // Браузер всё равно может ограничивать или приостанавливать фоновые задачи.
+  if (running) loopTimer = setTimeout(loop, 250);
 }
 
 function showPredictions(predictions) {
@@ -233,7 +236,7 @@ function showPredictions(predictions) {
     return;
   }
 
-  // Сглаживание вероятностей для отображения.
+  // Сглаживание используется только для отображения. Класс выбирается по исходным оценкам модели.
   if (smoothedGood === null || smoothedBad === null) {
     smoothedGood = good.probability;
     smoothedBad = bad.probability;
@@ -253,13 +256,11 @@ function showPredictions(predictions) {
   $("badBar").style.width = (smoothedBad * 100) + "%";
 
   const threshold = Number($("threshold").value) / 100;
-  const isGoodWinner = smoothedGood >= smoothedBad;
-  const winnerProbability = Math.max(smoothedGood, smoothedBad);
-  const classMargin = Math.abs(smoothedGood - smoothedBad);
+  const winner = good.probability >= bad.probability ? good : bad;
 
-  // Решение принимается по сглаженным оценкам, а не по скачущим значениям одного кадра.
-  // При близких оценках модель считается неуверенной.
-  if (winnerProbability < threshold || classMargin < MIN_CLASS_MARGIN) {
+  // Модель сама выбирает класс по текущему кадру.
+  // Порог уверенности используется только для отсечения слабых предсказаний.
+  if (winner.probability < threshold) {
     badCount = 0;
     goodCount = 0;
     $("warning").hidden = true;
@@ -273,7 +274,7 @@ function showPredictions(predictions) {
   }
 
   // Модель определила правильную осанку.
-  if (isGoodWinner) {
+  if (normalizeLabel(winner.className) === normalizeLabel(GOOD)) {
     badCount = 0;
     goodCount = Math.min(goodCount + 1, REQUIRED_GOOD);
 
@@ -305,7 +306,7 @@ function showPredictions(predictions) {
   result(
     "bad",
     BAD,
-    `Уверенность модели: ${Math.round(winnerProbability * 100)}%. Последовательных определений: ${badCount}/${REQUIRED_BAD}.`
+    `Уверенность модели: ${Math.round(winner.probability * 100)}%. Последовательных определений: ${badCount}/${REQUIRED_BAD}.`
   );
 
   if (badCount >= REQUIRED_BAD) {
