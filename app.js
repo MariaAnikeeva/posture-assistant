@@ -9,10 +9,11 @@ const REQUIRED_GOOD = 5;  // Сколько раз подряд нужна хо�
 const SMOOTHING_ALPHA = 0.25;
 const $ = id => document.getElementById(id);
 const canvas = $("view"), ctx = canvas.getContext("2d");
-let model = null, webcam = null, running = false, raf = null;
-let badCount = 0, goodCount = 0, latest = null;
+let model = null, webcam = null, running = false, loopTimer = null;
+let badCount = 0, goodCount = 0;
 let smoothedGood = null, smoothedBad = null;
-let alertSent = false, lastStretchAt = 0, stretchTimer = null;
+let alertSent = false, notificationSent = false;
+let lastStretchAt = 0, stretchTimer = null;
 let currentNotification = null;
 const STRETCH_MS = 40 * 60 * 1000;
 
@@ -102,6 +103,17 @@ async function enableNotifications() {
     console.warn("Не удалось запросить разрешение уведомлений:", e);
   }
   updateNotificationUI();
+
+  // Если предупреждение уже появилось, но разрешения ещё не было,
+  // отправляем уведомление после того, как пользователь его включил.
+  if (running && alertSent && !notificationSent &&
+      badCount >= REQUIRED_BAD && Notification.permission === "granted") {
+    notificationSent = sendNotification(
+      "Проверьте положение тела",
+      "Модель несколько раз подряд определила класс «Плохая осанка». Возможно, стоит проверить позу.",
+      "posture-alert"
+    );
+  }
 }
 function checkStretchReminder() {
   if (!running || !$("stretchToggle").checked || !lastStretchAt) return;
@@ -115,7 +127,7 @@ function normalizeLabel(label) {
 }
 async function loadModel() {
   if (model) return;
-  if (!window.tmPose) throw new Error("Не загрузилась библиотека модели. Проверь интернет и обнови страницу.");
+  if (!window.tmPose) throw new Error("Не загрузилась библиотека модели. Проверьте подключение к интернету и обновите страницу.");
   modelStatus("Загружаем модель");
   // Keep the model local until validation succeeds. A failed check must not
   // leave a partially initialized model that makes the next click behave differently.
@@ -123,14 +135,14 @@ async function loadModel() {
   const labels = loadedModel.getClassLabels ? loadedModel.getClassLabels() : null;
   if (labels && (!labels.some(label => normalizeLabel(label) === normalizeLabel(GOOD)) ||
                  !labels.some(label => normalizeLabel(label) === normalizeLabel(BAD)))) {
-    throw new Error("Названия классов в модели не совпадают с ожидаемыми. Проверь классы в Teachable Machine.");
+    throw new Error("Названия классов в модели не совпадают с ожидаемыми. Проверьте классы в Teachable Machine.");
   }
   model = loadedModel;
   modelStatus("Модель загружена", "live");
 }
 async function start() {
   $("start").disabled = true; $("stop").disabled = true;
-  status("Загружаем модель…"); result("neutral","Загрузка модели","Подожди немного.");
+  status("Загружаем модель…"); result("neutral","Загрузка модели","Подождите немного.");
   try {
     await loadModel();
     status("Запрашиваем доступ к камере…");
@@ -140,9 +152,10 @@ async function start() {
     badCount = 0;
     goodCount = 0;
     alertSent = false;
+    notificationSent = false;
     smoothedGood = null;
     smoothedBad = null;
-    lastStretchAt = Date.now();
+    lastStretchAt = $("stretchToggle").checked ? Date.now() : 0;
     status("Камера работает. Анализируем позу.","live");
     if (stretchTimer) clearInterval(stretchTimer);
     stretchTimer = setInterval(checkStretchReminder, 15000);
@@ -154,15 +167,18 @@ async function start() {
     canvas.hidden = true; $("placeholder").hidden = false; $("liveLabel").hidden = true;
     if (stretchTimer) clearInterval(stretchTimer); stretchTimer = null;
     status(e.message || "Не удалось запустить камеру или модель.","error");
-    modelStatus("Ошибка","error"); result("neutral","Не удалось запустить",(e && e.message) ? e.message : "Проверь разрешение камеры и подключение к интернету.");
+    modelStatus("Ошибка","error"); result("neutral","Не удалось запустить",(e && e.message) ? e.message : "Проверьте разрешение камеры и подключение к интернету.");
   }
 }
 function stop() {
-  running = false; if (raf !== null) cancelAnimationFrame(raf); raf = null;
+  running = false;
+  if (loopTimer !== null) clearTimeout(loopTimer);
+  loopTimer = null;
   if (stretchTimer) clearInterval(stretchTimer);
   stretchTimer = null;
   lastStretchAt = 0;
   alertSent = false;
+  notificationSent = false;
   smoothedGood = null;
   smoothedBad = null;
   if (webcam) { try { webcam.stop(); } catch (_) {} }
@@ -173,7 +189,7 @@ function stop() {
   badCount = 0;
   goodCount = 0;
   status("Камера выключена."); modelStatus(model ? "Модель загружена" : "Не запущена");
-  result("neutral","Ожидание запуска","Включи камеру, чтобы начать.");
+  result("neutral","Ожидание запуска","Включите камеру, чтобы начать.");
 }
 async function loop() {
   if (!running || !webcam || !model) return;
@@ -181,6 +197,11 @@ async function loop() {
     webcam.update();
     const {pose,posenetOutput} = await model.estimatePose(webcam.canvas);
     const predictions = await model.predict(posenetOutput);
+    if (!running) return;
+
+    if ($("cameraBadge").classList.contains("error")) {
+      status("Камера работает. Анализируем позу.","live");
+    }
     ctx.drawImage(webcam.canvas,0,0,canvas.width,canvas.height);
     if (pose) {
       tmPose.drawKeypoints(pose.keypoints,0.5,ctx);
@@ -190,12 +211,12 @@ async function loop() {
   } catch (e) {
     console.error("Ошибка анализа кадра:", e); status("Ошибка анализа кадра: " + (e && e.message ? e.message : "подробности в консоли"),"error");
   }
-  if (running) raf = requestAnimationFrame(loop);
+  // Таймер продолжает давать браузеру возможность выполнять анализ в скрытой вкладке.
+  // Браузер всё равно может ограничивать или приостанавливать фоновые задачи.
+  if (running) loopTimer = setTimeout(loop, 250);
 }
 
 function showPredictions(predictions) {
-  latest = predictions;
-
   const good = predictions.find(
     p => normalizeLabel(p.className) === normalizeLabel(GOOD)
   );
@@ -215,7 +236,7 @@ function showPredictions(predictions) {
     return;
   }
 
-  // Сглаживание вероятностей для отображения.
+  // Сглаживание используется только для отображения. Класс выбирается по исходным оценкам модели.
   if (smoothedGood === null || smoothedBad === null) {
     smoothedGood = good.probability;
     smoothedBad = bad.probability;
@@ -237,7 +258,8 @@ function showPredictions(predictions) {
   const threshold = Number($("threshold").value) / 100;
   const winner = good.probability >= bad.probability ? good : bad;
 
-  // Если модель недостаточно уверена, не учитываем это предсказание.
+  // Модель сама выбирает класс по текущему кадру.
+  // Порог уверенности используется только для отсечения слабых предсказаний.
   if (winner.probability < threshold) {
     badCount = 0;
     goodCount = 0;
@@ -246,7 +268,7 @@ function showPredictions(predictions) {
     result(
       "neutral",
       "Не удаётся уверенно определить позу",
-      "Попробуй улучшить освещение и расположиться так, чтобы модель хорошо видела позу."
+      "Попробуйте улучшить освещение и расположиться так, чтобы модель хорошо видела позу."
     );
     return;
   }
@@ -260,6 +282,7 @@ function showPredictions(predictions) {
     // последовательных уверенных определений хорошей осанки.
     if (alertSent && goodCount >= REQUIRED_GOOD) {
       alertSent = false;
+      notificationSent = false;
       goodCount = 0;
     }
 
@@ -290,13 +313,12 @@ function showPredictions(predictions) {
     $("warning").hidden = false;
 
     if (!alertSent) {
-      sendNotification(
+      alertSent = true;
+      notificationSent = sendNotification(
         "Проверьте положение тела",
         "Модель несколько раз подряд определила класс «Плохая осанка». Возможно, стоит проверить позу.",
         "posture-alert"
       );
-
-      alertSent = true;
     }
   }
 }
@@ -309,7 +331,7 @@ $("stop").addEventListener("click",stop);
 $("enableNotifications").addEventListener("click",enableNotifications);
 $("stretchToggle").addEventListener("change", () => {
   try { localStorage.setItem("posture-assistant-stretch-reminder", $("stretchToggle").checked ? "on" : "off"); } catch (_) {}
-  if ($( "stretchToggle" ).checked && running && !lastStretchAt) lastStretchAt = Date.now();
+  if (running) lastStretchAt = $("stretchToggle").checked ? Date.now() : 0;
 });
 try { $("stretchToggle").checked = localStorage.getItem("posture-assistant-stretch-reminder") !== "off"; } catch (_) {}
 updateNotificationUI();
