@@ -12,7 +12,7 @@ const ctx = canvas.getContext("2d");
 let model = null;
 let webcam = null;
 let running = false;
-let frameRequest = null;
+let loopTimer = null;
 let stretchTimer = null;
 let lastStretchAt = 0;
 let alertSent = false;
@@ -194,8 +194,8 @@ async function start() {
 
 function stop() {
   running = false;
-  if (frameRequest !== null) cancelAnimationFrame(frameRequest);
-  frameRequest = null;
+  if (loopTimer !== null) clearTimeout(loopTimer);
+  loopTimer = null;
 
   if (stretchTimer) clearInterval(stretchTimer);
   stretchTimer = null;
@@ -242,7 +242,7 @@ async function loop() {
     status("Ошибка анализа кадра: " + (error.message || "подробности в консоли"), "error");
   }
 
-  if (running) frameRequest = requestAnimationFrame(loop);
+  if (running) loopTimer = setTimeout(loop, 250);
 }
 
 function showPredictions(predictions) {
