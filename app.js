@@ -130,7 +130,7 @@ async function loadModel() {
 }
 async function start() {
   $("start").disabled = true; $("stop").disabled = true;
-  status("Загружаем модель…"); result("neutral","Загрузка модели","Подожди немного.");
+  status("Загружаем модель…"); result("neutral","Загрузка модели","Подождите немного.");
   try {
     await loadModel();
     status("Запрашиваем доступ к камере…");
@@ -154,7 +154,7 @@ async function start() {
     canvas.hidden = true; $("placeholder").hidden = false; $("liveLabel").hidden = true;
     if (stretchTimer) clearInterval(stretchTimer); stretchTimer = null;
     status(e.message || "Не удалось запустить камеру или модель.","error");
-    modelStatus("Ошибка","error"); result("neutral","Не удалось запустить",(e && e.message) ? e.message : "Проверь разрешение камеры и подключение к интернету.");
+    modelStatus("Ошибка","error"); result("neutral","Не удалось запустить",(e && e.message) ? e.message : "Проверьте разрешение камеры и подключение к интернету.");
   }
 }
 function stop() {
@@ -173,7 +173,7 @@ function stop() {
   badCount = 0;
   goodCount = 0;
   status("Камера выключена."); modelStatus(model ? "Модель загружена" : "Не запущена");
-  result("neutral","Ожидание запуска","Включи камеру, чтобы начать.");
+  result("neutral","Ожидание запуска","Включите камеру, чтобы начать.");
 }
 async function loop() {
   if (!running || !webcam || !model) return;
@@ -246,7 +246,7 @@ function showPredictions(predictions) {
     result(
       "neutral",
       "Не удаётся уверенно определить позу",
-      "Попробуй улучшить освещение и расположиться так, чтобы модель хорошо видела позу."
+      "Попробуйте улучшить освещение и расположиться так, чтобы модель хорошо видела позу."
     );
     return;
   }
