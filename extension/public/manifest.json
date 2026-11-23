@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Ассистент осанки — фоновое отслеживание",
+  "version": "1.0.0",
+  "description": "Продолжает анализировать положение тела и отправлять напоминания, пока Chrome открыт.",
+  "minimum_chrome_version": "116",
+  "permissions": ["offscreen", "notifications", "alarms", "storage", "tabs"],
+  "host_permissions": ["https://teachablemachine.withgoogle.com/*"],
+  "background": { "service_worker": "service-worker.js", "type": "module" },
+  "action": { "default_title": "Ассистент осанки", "default_popup": "popup.html" },
+  "content_scripts": [{
+    "matches": [
+      "https://posture-assistant.vercel.app/*",
+      "https://posture-assistant-git-background-extension-nika-79d5.vercel.app/*"
+    ],
+    "js": ["content.js"],
+    "run_at": "document_start"
+  }]
+}
