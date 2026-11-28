@@ -9,7 +9,10 @@ const REQUIRED_GOOD = 5;  // Сколько раз подряд нужна хо�
 const SMOOTHING_ALPHA = 0.25;
 const $ = id => document.getElementById(id);
 const canvas = $("view"), ctx = canvas.getContext("2d");
-let model = null, webcam = null, running = false, raf = null;
+let model = null, webcam = null, running = false, loopTimer = null;
+let lastInferenceAt = 0, inferenceCount = 0, hiddenAtInferenceCount = 0;
+const FOREGROUND_INTERVAL_MS = 100;
+const BACKGROUND_INTERVAL_MS = 1000;
 let badCount = 0, goodCount = 0, latest = null;
 let smoothedGood = null, smoothedBad = null;
 let alertSent = false, lastStretchAt = 0, stretchTimer = null;
@@ -146,6 +149,10 @@ async function start() {
     status("Камера работает. Анализируем позу.","live");
     if (stretchTimer) clearInterval(stretchTimer);
     stretchTimer = setInterval(checkStretchReminder, 15000);
+    lastInferenceAt = 0;
+    inferenceCount = 0;
+    hiddenAtInferenceCount = 0;
+    updateBackgroundDiagnostics("Анализ запущен. Переключение вкладок будет проверено отдельно.");
     loop();
   } catch (e) {
     console.error(e);
@@ -158,7 +165,9 @@ async function start() {
   }
 }
 function stop() {
-  running = false; if (raf !== null) cancelAnimationFrame(raf); raf = null;
+  running = false;
+  if (loopTimer !== null) clearTimeout(loopTimer);
+  loopTimer = null;
   if (stretchTimer) clearInterval(stretchTimer);
   stretchTimer = null;
   lastStretchAt = 0;
@@ -177,20 +186,40 @@ function stop() {
 }
 async function loop() {
   if (!running || !webcam || !model) return;
+
   try {
+    // webcam.update() копирует актуальный кадр из видеопотока в canvas Teachable Machine.
+    // В фоне не рисуем скелет и не обновляем визуальные элементы — только анализируем кадр.
     webcam.update();
     const {pose,posenetOutput} = await model.estimatePose(webcam.canvas);
     const predictions = await model.predict(posenetOutput);
-    ctx.drawImage(webcam.canvas,0,0,canvas.width,canvas.height);
-    if (pose) {
-      tmPose.drawKeypoints(pose.keypoints,0.5,ctx);
-      tmPose.drawSkeleton(pose.keypoints,0.5,ctx);
-    }
+
+    lastInferenceAt = Date.now();
+    inferenceCount++;
     showPredictions(predictions);
+
+    if (!document.hidden) {
+      ctx.drawImage(webcam.canvas,0,0,canvas.width,canvas.height);
+      if (pose) {
+        tmPose.drawKeypoints(pose.keypoints,0.5,ctx);
+        tmPose.drawSkeleton(pose.keypoints,0.5,ctx);
+      }
+    }
+
+    // Проверяем напоминание по прошедшему времени, а не только по setInterval:
+    // это позволяет отправить его при следующем успешном анализе после задержки фонового таймера.
+    checkStretchReminder();
   } catch (e) {
-    console.error("Ошибка анализа кадра:", e); status("Ошибка анализа кадра: " + (e && e.message ? e.message : "подробности в консоли"),"error");
+    console.error("Ошибка анализа кадра:", e);
+    if (!document.hidden) {
+      status("Ошибка анализа кадра: " + (e && e.message ? e.message : "подробности в консоли"),"error");
+    }
   }
-  if (running) raf = requestAnimationFrame(loop);
+
+  if (running) {
+    const delay = document.hidden ? BACKGROUND_INTERVAL_MS : FOREGROUND_INTERVAL_MS;
+    loopTimer = setTimeout(loop, delay);
+  }
 }
 
 function showPredictions(predictions) {
@@ -206,16 +235,17 @@ function showPredictions(predictions) {
   if (!good || !bad) {
     badCount = 0;
     goodCount = 0;
-    $("warning").hidden = true;
-    result(
-      "neutral",
-      "Неизвестные классы",
-      "Названия классов модели должны быть «Правильная осанка» и «Плохая осанка»."
-    );
+    if (!document.hidden) {
+      $("warning").hidden = true;
+      result(
+        "neutral",
+        "Неизвестные классы",
+        "Названия классов модели должны быть «Правильная осанка» и «Плохая осанка»."
+      );
+    }
     return;
   }
 
-  // Сглаживание вероятностей для отображения.
   if (smoothedGood === null || smoothedBad === null) {
     smoothedGood = good.probability;
     smoothedBad = bad.probability;
@@ -229,65 +259,65 @@ function showPredictions(predictions) {
       (1 - SMOOTHING_ALPHA) * smoothedBad;
   }
 
-  $("goodText").textContent = Math.round(smoothedGood * 100) + "%";
-  $("badText").textContent = Math.round(smoothedBad * 100) + "%";
-  $("goodBar").style.width = (smoothedGood * 100) + "%";
-  $("badBar").style.width = (smoothedBad * 100) + "%";
+  if (!document.hidden) {
+    $("goodText").textContent = Math.round(smoothedGood * 100) + "%";
+    $("badText").textContent = Math.round(smoothedBad * 100) + "%";
+    $("goodBar").style.width = (smoothedGood * 100) + "%";
+    $("badBar").style.width = (smoothedBad * 100) + "%";
+  }
 
   const threshold = Number($("threshold").value) / 100;
   const winner = good.probability >= bad.probability ? good : bad;
 
-  // Если модель недостаточно уверена, не учитываем это предсказание.
   if (winner.probability < threshold) {
     badCount = 0;
     goodCount = 0;
-    $("warning").hidden = true;
-
-    result(
-      "neutral",
-      "Не удаётся уверенно определить позу",
-      "Попробуйте улучшить освещение и расположиться так, чтобы модель хорошо видела позу."
-    );
+    if (!document.hidden) {
+      $("warning").hidden = true;
+      result(
+        "neutral",
+        "Не удаётся уверенно определить позу",
+        "Попробуйте улучшить освещение и расположиться так, чтобы модель хорошо видела позу."
+      );
+    }
     return;
   }
 
-  // Модель определила правильную осанку.
   if (normalizeLabel(winner.className) === normalizeLabel(GOOD)) {
     badCount = 0;
     goodCount = Math.min(goodCount + 1, REQUIRED_GOOD);
 
-    // Повторно разрешаем уведомление только после пяти
-    // последовательных уверенных определений хорошей осанки.
     if (alertSent && goodCount >= REQUIRED_GOOD) {
       alertSent = false;
       goodCount = 0;
     }
 
-    $("warning").hidden = true;
-
-    result(
-      "good",
-      GOOD,
-      alertSent
-        ? `Модель определяет правильную осанку. Для сброса уведомления нужно ещё ${REQUIRED_GOOD - goodCount} последовательных определений.`
-        : "Модель уверенно определяет правильную осанку."
-    );
-
+    if (!document.hidden) {
+      $("warning").hidden = true;
+      result(
+        "good",
+        GOOD,
+        alertSent
+          ? `Модель определяет правильную осанку. Для сброса уведомления нужно ещё ${REQUIRED_GOOD - goodCount} последовательных определений.`
+          : "Модель уверенно определяет правильную осанку."
+      );
+    }
     return;
   }
 
-  // Модель определила плохую осанку.
   goodCount = 0;
   badCount++;
 
-  result(
-    "bad",
-    BAD,
-    `Уверенность модели: ${Math.round(winner.probability * 100)}%. Последовательных определений: ${badCount}/${REQUIRED_BAD}.`
-  );
+  if (!document.hidden) {
+    result(
+      "bad",
+      BAD,
+      `Уверенность модели: ${Math.round(winner.probability * 100)}%. Последовательных определений: ${badCount}/${REQUIRED_BAD}.`
+    );
+  }
 
   if (badCount >= REQUIRED_BAD) {
-    $("warning").hidden = false;
+    if (!document.hidden) $("warning").hidden = false;
 
     if (!alertSent) {
       sendNotification(
@@ -295,10 +325,14 @@ function showPredictions(predictions) {
         "Модель несколько раз подряд определила класс «Плохая осанка». Возможно, стоит проверить позу.",
         "posture-alert"
       );
-
       alertSent = true;
     }
   }
+}
+
+function updateBackgroundDiagnostics(message) {
+  const element = $("backgroundStatus");
+  if (element) element.textContent = message;
 }
 
 $("threshold").addEventListener("input", () => {
@@ -314,7 +348,28 @@ $("stretchToggle").addEventListener("change", () => {
 try { $("stretchToggle").checked = localStorage.getItem("posture-assistant-stretch-reminder") !== "off"; } catch (_) {}
 updateNotificationUI();
 document.addEventListener("visibilitychange", () => {
-  // If the browser throttled background timers, check elapsed time when the user returns.
+  if (document.hidden) {
+    hiddenAtInferenceCount = inferenceCount;
+    updateBackgroundDiagnostics("Вкладка в фоне. Камера и анализ продолжают работу, если браузер не ограничил выполнение страницы.");
+    return;
+  }
+
+  const processedInBackground = inferenceCount - hiddenAtInferenceCount;
+  const secondsSinceLastInference = lastInferenceAt
+    ? Math.max(0, Math.round((Date.now() - lastInferenceAt) / 1000))
+    : null;
+
+  if (running) {
+    updateBackgroundDiagnostics(
+      "За время в фоне обработано кадров: " + processedInBackground +
+      ". Последний анализ: " +
+      (secondsSinceLastInference === null ? "ещё не выполнен" : secondsSinceLastInference + " с назад") +
+      ". Частота зависит от ограничений Chrome."
+    );
+  } else {
+    updateBackgroundDiagnostics("Отслеживание остановлено.");
+  }
+
   checkStretchReminder();
 });
 })();
